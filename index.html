@@ -2,6 +2,10 @@
 <html lang="de">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <title>Sales Grand Prix</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
@@ -61,7 +65,10 @@ function startCountdown(){
 }
 
 async function fetchTSV(url){
-  const r=await fetch(url+'?_='+Date.now(),{cache:'no-store'});
+  const r=await fetch(url+'?_='+Date.now(),{
+    cache:'no-store',
+    headers:{'Cache-Control':'no-cache','Pragma':'no-cache'}
+  });
   if(!r.ok)throw new Error('HTTP '+r.status);
   return r.text();
 }

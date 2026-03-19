@@ -1,14 +1,16 @@
 name: Daten aktualisieren
+
 on:
   schedule:
     - cron: '0 * * * *'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   fetch:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -16,7 +18,8 @@ jobs:
         run: |
           curl -L "https://docs.google.com/spreadsheets/d/e/2PACX-1vT-tkuIx-dJHnRZ4eJcFe9PTkHpqMCDdrnUaYvl1vF7-KaHqGCcvzq1Znw5VZ_2WFPGDVAYL2kZPwhC/pub?gid=1875048167&single=true&output=tsv" -o daten.tsv
           curl -L "https://docs.google.com/spreadsheets/d/e/2PACX-1vT-tkuIx-dJHnRZ4eJcFe9PTkHpqMCDdrnUaYvl1vF7-KaHqGCcvzq1Znw5VZ_2WFPGDVAYL2kZPwhC/pub?gid=0&single=true&output=tsv" -o config.tsv
-- name: Commit & Push
+
+      - name: Commit und Push
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"

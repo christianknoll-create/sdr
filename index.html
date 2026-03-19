@@ -11,6 +11,11 @@ canvas{display:block;image-rendering:pixelated}
 #ui{position:absolute;top:8px;right:10px;display:flex;gap:6px;align-items:center}
 .btn{font-family:monospace;font-size:10px;background:none;padding:4px 8px;cursor:pointer;border:1px solid}
 #status{font-family:monospace;font-size:10px;color:#0f0}
+#ov{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.93);align-items:center;justify-content:center;flex-direction:column;gap:14px;z-index:10}
+#ov.show{display:flex}
+#ov label{font-family:monospace;font-size:12px;color:#ff0;text-align:center;line-height:2}
+#ov input{width:min(640px,90%);padding:8px;font-size:12px;background:#111;color:#0f0;border:1px solid #0f0;outline:none;font-family:monospace}
+#ov .save{font-family:monospace;font-size:12px;color:#000;background:#ff0;border:none;padding:10px 20px;cursor:pointer}
 </style>
 </head>
 <body>
@@ -18,28 +23,43 @@ canvas{display:block;image-rendering:pixelated}
 <div id="ui">
   <span id="status">LADEN...</span>
   <button class="btn" style="color:#0f0;border-color:#0f0" onclick="doReload()">↺ RELOAD</button>
+  <button class="btn" style="color:#0ff;border-color:#0ff" onclick="showOv()">⚙ URLS</button>
+</div>
+<div id="ov">
+  <label>CONFIG-TAB TSV-URL</label>
+  <input id="u1">
+  <label>DATEN-TAB TSV-URL</label>
+  <input id="u2">
+  <button class="save" onclick="saveOv()">SPEICHERN &amp; LADEN</button>
+  <button class="btn" style="color:#888;border-color:#888;margin-top:6px" onclick="hideOv()">ABBRECHEN</button>
 </div>
 <script>
+// ── URLS ─────────────────────────────────────────────────────────
 const CFG_URL='./config.tsv';
 const DAT_URL='./daten.tsv';
 const SPD=3, RELOAD_MIN=60;
 const FARB_POOL=['#ff0','#0ff','#f0f','#4f4','#f80','#f44','#8ff','#c4f','#ff8','#f4a','#0f8','#fa0','#f88','#4ff'];
 
+// ── CANVAS ────────────────────────────────────────────────────────
 const cv=document.getElementById('c');
 const cx=cv.getContext('2d');
 let W=0,H=0;
 function resize(){W=window.innerWidth;H=window.innerHeight;cv.width=W;cv.height=H;}
 window.addEventListener('resize',resize);resize();
 
+// ── STATE ─────────────────────────────────────────────────────────
 let tick=0;
-let titel='★ SALES GRAND PRIX ★';
+let titel='SDR Sales Grand Prix';
 let tickerText='Vollgas!';
 let aktKW='';
 let lastLoad='--:--';
+
+// Fahrer-Objekt:
+// { name, typ, farbe, rang, kwWert, broken }
+// rang = Dauerrang aus Sheet-Zeile 4
+// kwWert = aktueller Wochenwert (letzte nicht-leere Zeile)
+// broken = letzter eingetragener Wert === 0
 let fahrer=[];
-let loading=true;
-let countdown=30;
-let countdownTimer=null;
 
 const STEINE=Array.from({length:20},(_,i)=>({
   px:(i*473)%9999,
@@ -48,25 +68,33 @@ const STEINE=Array.from({length:20},(_,i)=>({
   col:['#5a4020','#6a5030','#4a3010','#7a6040'][i%4]
 }));
 
+// ── OVERLAY ───────────────────────────────────────────────────────
+function showOv(){
+  document.getElementById('u1').value=localStorage.getItem('cfgUrl')||CFG_URL;
+  document.getElementById('u2').value=localStorage.getItem('datUrl')||DAT_URL;
+  document.getElementById('ov').classList.add('show');
+}
+function hideOv(){document.getElementById('ov').classList.remove('show');}
+function saveOv(){
+  localStorage.setItem('cfgUrl',document.getElementById('u1').value.trim()||CFG_URL);
+  localStorage.setItem('datUrl',document.getElementById('u2').value.trim()||DAT_URL);
+  hideOv();doReload();
+}
 function setStatus(s){document.getElementById('status').textContent=s;}
 
-function startCountdown(){
-  countdown=30;
-  countdownTimer=setInterval(()=>{
-    countdown--;
-    if(countdown<=0){clearInterval(countdownTimer);countdownTimer=null;}
-  },1000);
-}
-
+// ── TSV FETCH ─────────────────────────────────────────────────────
 async function fetchTSV(url){
+  // Direkt laden — kein Proxy nötig da Dateien im selben Repo liegen
   const r=await fetch(url+'?_='+Date.now(),{cache:'no-store'});
   if(!r.ok)throw new Error('HTTP '+r.status);
   return r.text();
 }
 
+// ── TSV PARSE ─────────────────────────────────────────────────────
 function parseTSV(raw){
   return raw.replace(/\r\n/g,'\n').replace(/\r/g,'\n')
-    .trim().split('\n').filter(l=>l.trim())
+    .trim().split('\n')
+    .filter(l=>l.trim())
     .map(l=>l.split('\t').map(s=>s.trim().replace(/^"|"$/g,'')));
 }
 
@@ -78,9 +106,11 @@ function toNum(s){
   return isNaN(n)?NaN:n;
 }
 
+// ── LADEN ─────────────────────────────────────────────────────────
 async function loadConfig(url){
   try{
     const raw=await fetchTSV(url);
+    // TSV: Spalte A = Schlüssel, Rest = Wert (mit Tabs zusammenjoinen falls Wert Tabs enthält)
     const lines=raw.replace(/\r\n/g,'\n').replace(/\r/g,'\n').trim().split('\n').filter(l=>l.trim());
     lines.forEach(line=>{
       const parts=line.split('\t');
@@ -96,21 +126,37 @@ async function loadDaten(url){
   try{
     const raw=await fetchTSV(url);
     const rows=parseTSV(raw);
+
+    // Sheet-Aufbau:
+    // Zeile 0: Rennname | N1 | N2 | ...  (neue Fahrer einfach Spalte anhängen)
+    // Zeile 1: Typ      | WARM | COLD | ...
+    // Zeile 2: Farbe    | #ff0 | #0ff | ...
+    // Zeile 3: Rang     | 3 | 1 | ...
+    // Zeile 4: Aktiv    | 1 | 0 | ...   (1=anzeigen, 0=ausblenden)
+    // Zeile 5+: KW01    | 0.24 | ...
+
+    // Namen dynamisch — alle nicht-leeren Spalten ab B
     const namen=rows[0].slice(1).map(s=>s.trim()).filter(s=>s!=='');
     const n=namen.length;
     if(n===0)return false;
-    const typen =rows[1].slice(1,n+1).map(s=>(s||'').toUpperCase().includes('COLD')?'COLD':'WARM');
-    const farben=rows[2].slice(1,n+1).map((s,i)=>{const c=(s||'').trim();return c.startsWith('#')?c:FARB_POOL[i%FARB_POOL.length];});
-    const aktiv =rows[3].slice(1,n+1).map(s=>String(s||'').trim()==='1');
-    const raenge=rows[4].slice(1,n+1).map(s=>parseInt(s)||999);
+
+    const typen  =rows[1].slice(1,n+1).map(s=>(s||'').toUpperCase().includes('COLD')?'COLD':'WARM');
+    const farben =rows[2].slice(1,n+1).map((s,i)=>{const c=(s||'').trim();return c.startsWith('#')?c:FARB_POOL[i%FARB_POOL.length];});
+    const aktiv  =rows[3].slice(1,n+1).map(s=>String(s||'').trim()==='1');
+    const raenge =rows[4].slice(1,n+1).map(s=>parseInt(s)||999);
+
+    // KW-Zeilen ab Zeile 5
     const kwZeilen=rows.slice(5).filter(r=>{
       const label=(r[0]||'').trim();
       if(!label)return false;
       return r.slice(1,n+1).some(v=>Number.isFinite(toNum(v)));
     });
+
     if(!kwZeilen.length)return false;
     aktKW=(kwZeilen[kwZeilen.length-1][0]||'').trim();
+
     fahrer=namen.map((name,i)=>{
+      // Letzter nicht-leerer Wert
       let kwWert=NaN;
       for(let k=kwZeilen.length-1;k>=0;k--){
         const v=toNum(kwZeilen[k][i+1]);
@@ -119,6 +165,7 @@ async function loadDaten(url){
       const broken=Number.isFinite(kwWert)&&kwWert===0;
       return{name,typ:typen[i],farbe:farben[i],rang:raenge[i],aktiv:aktiv[i],kwWert,broken};
     });
+
     return true;
   }catch(e){
     setStatus('ERR:'+String(e).slice(0,20));
@@ -127,91 +174,124 @@ async function loadDaten(url){
 }
 
 async function doReload(){
-  await Promise.all([loadConfig(CFG_URL),loadDaten(DAT_URL)]);
+  const cu=localStorage.getItem('cfgUrl')||CFG_URL;
+  const du=localStorage.getItem('datUrl')||DAT_URL;
+  // Parallel laden — Config und Daten gleichzeitig
+  await Promise.all([loadConfig(cu),loadDaten(du)]);
   lastLoad=new Date().toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'});
   const ok=fahrer.length>0;
   setStatus(ok?'OK '+lastLoad:'DAT ERR');
   if(ok){loading=false;clearInterval(countdownTimer);}
 }
 
-function getLy(){
-  const listH=Math.round(H*0.20);
-  const roadT=listH, roadH=Math.round(H*0.36), roadB=roadT+roadH;
-  const grasH=Math.round(H*0.04);
-  const bumpT=roadB+grasH, bumpH=Math.round(H*0.30), bumpB=bumpT+bumpH;
-  return{listH,roadT,roadH,roadB,grasH,bumpT,bumpH,bumpB};
+// ── LOADING SCREEN ───────────────────────────────────────────────
+let loading=true;
+let countdown=10;
+let countdownTimer=null;
+
+function startCountdown(){
+  countdown=30; // 30 Sekunden — passt zur echten Ladezeit
+  countdownTimer=setInterval(()=>{
+    countdown--;
+    if(countdown<=0){clearInterval(countdownTimer);countdownTimer=null;}
+  },1000);
 }
 
 function drawLoading(){
   cx.fillStyle='#000';cx.fillRect(0,0,W,H);
+  // Sterne
+  cx.fillStyle='#fff';
   for(let i=0;i<80;i++){
     const sx=(i*137+i*i*3)%W,sy=(i*79+13)%H;
     cx.fillStyle=(tick+i)%120<2?'#ff0':'#fff';
     cx.fillRect(sx,sy,1,1);
   }
-  const mx=W/2,my=H/2;
+  const cx2=W/2, cy2=H/2;
   const tfs=Math.max(14,Math.round(W*0.022));
   const fs=Math.max(11,Math.round(W*0.014));
-  cx.textAlign='center';
+
   cx.fillStyle='#ff0';
   cx.font='bold '+tfs+'px "Press Start 2P",monospace';
-  cx.fillText(titel,mx,my-tfs*3.5);
-  const barW=Math.round(W*0.5),barH=18;
-  const barX=mx-barW/2,barY=my-tfs*1.8;
+  cx.textAlign='center';
+  cx.fillText(titel,cx2,cy2-tfs*3);
+
+  cx.fillStyle='#0ff';
+  cx.font=fs+'px "Press Start 2P",monospace';
+  cx.fillText('MOTOREN WERDEN GESTARTET...',cx2,cy2-tfs);
+
+  // Ladebalken
+  const barW=Math.round(W*0.5), barH=20;
+  const barX=cx2-barW/2, barY=cy2;
   cx.fillStyle='#222';cx.fillRect(barX,barY,barW,barH);
-  const progress=Math.min(1,(30-Math.max(0,countdown))/30);
-  cx.fillStyle='#f44';cx.fillRect(barX,barY,Math.round(barW*progress),barH);
-  const glanz=(tick*4)%barW;
-  cx.fillStyle='rgba(255,255,255,0.15)';cx.fillRect(barX+glanz,barY,20,barH);
+  cx.fillStyle='#f44';
+  const prog=((tick*2)%(barW));
+  cx.fillRect(barX,barY,prog,barH);
   cx.strokeStyle='#f44';cx.lineWidth=2;cx.strokeRect(barX,barY,barW,barH);
-  cx.fillStyle='#0ff';cx.font=fs+'px monospace';
-  cx.fillText('MOTOREN WERDEN GESTARTET...',mx,my-tfs*0.5);
-  if(countdown>3){
+
+  // Countdown
+  if(countdown>0){
     cx.fillStyle='#ff0';
-    cx.font='bold '+Math.round(tfs*3)+'px "Press Start 2P",monospace';
-    cx.fillText(countdown,mx,my+tfs*2.8);
-    cx.fillStyle='#555';cx.font=fs+'px monospace';
-    cx.fillText('DAS RENNEN BEGINNT IN...',mx,my+tfs*1.2);
-  } else if(countdown===3){
-    cx.fillStyle='#f00';cx.beginPath();cx.arc(mx,my+tfs*2,tfs*1.2,0,Math.PI*2);cx.fill();
-    cx.fillStyle='#fff';cx.font='bold '+tfs+'px "Press Start 2P",monospace';cx.fillText('3',mx,my+tfs*2.5);
-  } else if(countdown===2){
-    cx.fillStyle='#ff0';cx.beginPath();cx.arc(mx,my+tfs*2,tfs*1.2,0,Math.PI*2);cx.fill();
-    cx.fillStyle='#000';cx.font='bold '+tfs+'px "Press Start 2P",monospace';cx.fillText('2',mx,my+tfs*2.5);
-  } else if(countdown===1){
-    cx.fillStyle='#0f0';cx.beginPath();cx.arc(mx,my+tfs*2,tfs*1.2,0,Math.PI*2);cx.fill();
-    cx.fillStyle='#000';cx.font='bold '+tfs+'px "Press Start 2P",monospace';cx.fillText('1',mx,my+tfs*2.5);
+    cx.font='bold '+Math.round(tfs*2.5)+'px "Press Start 2P",monospace';
+    cx.fillText(countdown,cx2,cy2+tfs*3);
+    cx.fillStyle='#888';
+    cx.font=fs+'px monospace';
+    cx.fillText('DAS RENNEN BEGINNT IN...',cx2,cy2+tfs*1.5);
   } else {
-    if(Math.floor(tick/15)%2===0){
+    // Blinkendes READY
+    if(Math.floor(tick/20)%2===0){
       cx.fillStyle='#0f0';
-      cx.font='bold '+Math.round(tfs*2)+'px "Press Start 2P",monospace';
-      cx.fillText('GO!',mx,my+tfs*3);
+      cx.font='bold '+Math.round(tfs*1.5)+'px "Press Start 2P",monospace';
+      cx.fillText('READY!',cx2,cy2+tfs*3);
     }
   }
   cx.textAlign='left';
 }
+function getLy(){
+  const listH=Math.round(H*0.20);
+  const roadT=listH;
+  const roadH=Math.round(H*0.36);
+  const roadB=roadT+roadH;
+  const grasH=Math.round(H*0.04);
+  const bumpT=roadB+grasH;
+  const bumpH=Math.round(H*0.30);
+  const bumpB=bumpT+bumpH;
+  return{listH,roadT,roadH,roadB,grasH,bumpT,bumpH,bumpB};
+}
 
+// ── HINTERGRUND ───────────────────────────────────────────────────
 function drawBg(l){
   const off=tick*SPD;
+
+  // Himmel
   cx.fillStyle='#000820';cx.fillRect(0,0,W,l.roadT);
   for(let i=0;i<80;i++){
     const sx=(i*137+i*i*3)%W,sy=(i*79+13)%(l.roadT-4);
-    cx.fillStyle=(tick+i)%120<2?'#ff0':'#fff';cx.fillRect(sx,sy,1,1);
+    cx.fillStyle=(tick+i)%120<2?'#ff0':'#fff';
+    cx.fillRect(sx,sy,1,1);
   }
+
+  // Straße
   cx.fillStyle='#252525';cx.fillRect(0,l.roadT,W,l.roadH);
+
+  // Randstreifen links→rechts (Autos fahren links = Straße geht rechts)
   const sw=44,so=off%sw;
   for(let x=so-sw*2;x<W+sw;x+=sw){
     const e=Math.floor((x-so)/sw)%2===0;
     cx.fillStyle=e?'#cc0000':'#fff';cx.fillRect(x,l.roadT,sw/2,7);
     cx.fillStyle=e?'#fff':'#cc0000';cx.fillRect(x,l.roadB-7,sw/2,7);
   }
+  // Mittellinie
   cx.fillStyle='#ff0';
   const mo=off%60;
   for(let x=mo-60;x<W+60;x+=60)cx.fillRect(x,l.roadT+l.roadH/2-2,36,4);
+
+  // Gras
   cx.fillStyle='#0a1a00';cx.fillRect(0,l.roadB,W,l.grasH);
   cx.fillStyle='#0d2200';
   const go=off%20;
   for(let x=go-20;x<W+20;x+=20)cx.fillRect(x,l.roadB+2,10,l.grasH-4);
+
+  // Buckelpiste
   cx.fillStyle='#1a0e00';cx.fillRect(0,l.bumpT,W,l.bumpH);
   const bs=Math.max(22,Math.round(W/28));
   const bo=off%bs;
@@ -219,6 +299,7 @@ function drawBg(l){
     cx.fillStyle='#2e1a00';
     cx.beginPath();cx.ellipse(x,l.bumpT+12,bs*0.72,14,0,Math.PI,0);cx.fill();
   }
+  // Steine
   STEINE.forEach(s=>{
     const sx=(s.px+off)%(W+80);
     const sy=l.bumpT+8+s.py*(l.bumpH-18);
@@ -229,54 +310,72 @@ function drawBg(l){
   });
   cx.fillStyle='#3a2000';cx.fillRect(0,l.bumpT,W,4);
   cx.fillStyle='#0a0500';cx.fillRect(0,l.bumpB-4,W,4);
+
   const lfs=Math.max(10,Math.round(W*0.012));
   cx.font=lfs+'px monospace';
   cx.fillStyle='#555';cx.fillText('ASPHALT – WARM LEADS',10,l.roadT-7);
   cx.fillStyle='#7a5200';cx.fillText('BUCKELPISTE – COLD LEADS  ⚠',10,l.bumpB+lfs+5);
 }
 
+// ── TOP-LISTE (sortiert nach Rang) ────────────────────────────────
 function drawListe(l){
   if(!fahrer.length)return;
   const sorted=[...fahrer].filter(f=>f.aktiv).sort((a,b)=>a.rang-b.rang);
   const fs=Math.max(9,Math.round(W*0.012));
   const tfs=Math.max(12,Math.round(W*0.016));
+
   cx.fillStyle='#ff0';
   cx.font='bold '+tfs+'px "Press Start 2P",monospace';
-  cx.fillText(titel+(aktKW?' – '+aktKW:''),10,Math.round(l.listH*0.30));
+  const titelMitKW=titel+(aktKW?' – '+aktKW:'');
+  cx.fillText(titelMitKW,10,Math.round(l.listH*0.30));
   cx.fillStyle='#444';cx.font=(fs-1)+'px monospace';
   cx.fillText('UPDATE: '+lastLoad,W-Math.round(W*0.17),Math.round(l.listH*0.30));
+
   const cols=Math.ceil(sorted.length/2);
   const colW=Math.floor(W/Math.min(cols,8));
   const rowH=Math.floor((l.listH*0.55)/2);
   const y0=Math.round(l.listH*0.48);
+
   sorted.forEach((f,i)=>{
-    const col=i%cols,row=Math.floor(i/cols);
-    const x=8+col*colW,y=y0+row*rowH;
+    const col=i%cols, row=Math.floor(i/cols);
+    const x=8+col*colW, y=y0+row*rowH;
     cx.fillStyle=f.farbe;cx.fillRect(x,y-fs+2,fs-2,fs-2);
     cx.fillStyle=f.broken?'#f44':'#eee';cx.font=fs+'px monospace';
-    cx.fillText(f.rang+'. '+(f.name.length>13?f.name.slice(0,13):f.name),x+fs+2,y);
+    const nm=f.name.length>13?f.name.slice(0,13):f.name;
+    cx.fillText(f.rang+'. '+nm,x+fs+2,y);
+    // Durchschnitt anzeigen — kwWert der aktuellen Woche
+    const kwStr=Number.isFinite(f.kwWert)&&f.kwWert>0?f.kwWert.toFixed(2):f.broken?'MOTORSCHADEN':'–';
     cx.fillStyle=f.broken?'#f44':'#999';cx.font=(fs-1)+'px monospace';
-    cx.fillText(f.broken?'MOTORSCHADEN':Number.isFinite(f.kwWert)&&f.kwWert>0?f.kwWert.toFixed(2):'–',x+fs+2,y+rowH*0.6);
+    cx.fillText(kwStr,x+fs+2,y+rowH*0.6);
   });
 }
 
+// ── SPORTWAGEN ────────────────────────────────────────────────────
 function drawCar(f,x,y,cw,wobble){
   const ch=Math.round(cw*0.37);
   const c=f.farbe;
   const dim=(hex,v)=>{try{const r=parseInt(hex.slice(1,3),16),g=parseInt(hex.slice(3,5),16),b=parseInt(hex.slice(5,7),16);return`rgb(${Math.round(r*v)},${Math.round(g*v)},${Math.round(b*v)})`;}catch(e){return hex;}};
+
   cx.save();
-  if(wobble)cx.translate(0,Math.sin(tick*0.08+f.rang*1.3)*3);
+  if(wobble)cx.translate(0,Math.sin(tick*0.08+f.rang*1.3)*3); // sanftes Auf/Ab
   if(f.broken)cx.translate(Math.sin(tick*0.9)*1.5,Math.sin(tick*1.2)*1);
+
+  // Schatten
   cx.fillStyle='rgba(0,0,0,0.35)';
   cx.beginPath();cx.ellipse(x+cw/2+3,y+ch+4,cw*0.45,5,0,0,Math.PI*2);cx.fill();
+  // Karosserie
   cx.fillStyle=c;
   cx.beginPath();
-  cx.moveTo(x,y+ch);cx.lineTo(x+Math.round(cw*.10),y+Math.round(ch*.22));
-  cx.lineTo(x+Math.round(cw*.36),y);cx.lineTo(x+Math.round(cw*.83),y);
-  cx.lineTo(x+cw,y+Math.round(ch*.32));cx.lineTo(x+cw,y+ch);
+  cx.moveTo(x,y+ch);
+  cx.lineTo(x+Math.round(cw*.10),y+Math.round(ch*.22));
+  cx.lineTo(x+Math.round(cw*.36),y);
+  cx.lineTo(x+Math.round(cw*.83),y);
+  cx.lineTo(x+cw,y+Math.round(ch*.32));
+  cx.lineTo(x+cw,y+ch);
   cx.closePath();cx.fill();
   cx.fillStyle=dim(c,0.45);cx.fillRect(x+Math.round(cw*.06),y+ch-2,Math.round(cw*.88),5);
   cx.fillStyle=dim(c,0.65);cx.fillRect(x+Math.round(cw*.1),y+Math.round(ch*.58),Math.round(cw*.8),2);
+  // Cockpit
   cx.fillStyle='#0d1f30';
   cx.beginPath();
   cx.moveTo(x+Math.round(cw*.34),y+2);cx.lineTo(x+Math.round(cw*.42),y-Math.round(ch*.4));
@@ -284,10 +383,12 @@ function drawCar(f,x,y,cw,wobble){
   cx.closePath();cx.fill();
   cx.fillStyle='#2a4a6a';
   cx.beginPath();cx.ellipse(x+Math.round(cw*.56),y-Math.round(ch*.20),Math.round(cw*.10),Math.round(ch*.22),0,Math.PI,0);cx.fill();
+  // Flügel
   cx.fillStyle=dim(c,0.55);
   cx.fillRect(x-Math.round(cw*.09),y+Math.round(ch*.52),Math.round(cw*.15),Math.round(ch*.2));
   cx.fillRect(x+Math.round(cw*.87),y+Math.round(ch*.08),Math.round(cw*.13),3);
   cx.fillRect(x+Math.round(cw*.90),y+Math.round(ch*.08),Math.round(cw*.08),Math.round(ch*.2));
+  // Räder
   const ww=Math.max(5,Math.round(cw*.13)),wh=Math.max(8,Math.round(ch*.58));
   [[Math.round(cw*.06),ch-3],[Math.round(cw*.77),ch-3]].forEach(([wx,wy])=>{
     cx.fillStyle='#111';cx.fillRect(x+wx,y+wy,ww,wh);
@@ -296,6 +397,7 @@ function drawCar(f,x,y,cw,wobble){
   });
   cx.fillStyle='#ffe090';cx.fillRect(x,y+Math.round(ch*.12),4,Math.round(ch*.14));
   cx.fillStyle='#ff3300';cx.fillRect(x+cw-3,y+Math.round(ch*.18),3,Math.round(ch*.12));
+  // Motorschaden
   if(f.broken){
     for(let i=0;i<5;i++){
       const age=(tick*2+i*14)%70;
@@ -311,76 +413,125 @@ function drawCar(f,x,y,cw,wobble){
   return ch;
 }
 
+// ── AUTOS PLATZIEREN ──────────────────────────────────────────────
 function drawAutos(l){
   if(!fahrer.length)return;
+
+  // Sauber trennen nach Typ
   const warm=fahrer.filter(f=>f.aktiv&&f.typ==='WARM');
   const cold=fahrer.filter(f=>f.aktiv&&f.typ==='COLD');
+
+  // X-Position: nach kwWert. Höchster Wert = weiter links (vorne)
+  // Motorschaden = ganz rechts
   const maxWarm=Math.max(...warm.filter(f=>!f.broken).map(f=>f.kwWert),0.001);
   const maxCold=Math.max(...cold.filter(f=>!f.broken).map(f=>f.kwWert),0.001);
+
   const cw=Math.max(44,Math.round(W*0.065));
   const ch=Math.round(cw*0.37);
-  const mL=Math.round(W*0.03),mR=Math.round(W*0.05);
+  const mL=Math.round(W*0.03), mR=Math.round(W*0.05);
   const trackW=W-mL-mR-cw;
   const xFront=mL+Math.round(trackW*0.04);
-  const xBack=mL+Math.round(trackW*0.68);
+  const xBack =mL+Math.round(trackW*0.68);
   const xBroken=mL+trackW;
   const nfs=Math.max(9,Math.round(W*0.011));
 
+  function carX(f,maxVal){
+    if(f.broken||!Number.isFinite(f.kwWert)||f.kwWert<=0)return xBroken;
+    const r=Math.min(1,f.kwWert/maxVal);
+    return xFront+Math.round((1-r)*(xBack-xFront));
+  }
+
   function drawGroup(group,areaT,areaH,isCold,maxVal){
     if(!group.length)return;
-    const lh=Math.floor(areaH/group.length);
+    const n=group.length;
+    const lh=Math.floor(areaH/n);
+
     group.forEach((f,i)=>{
+      // Kein Wert und kein Motorschaden → Auto nicht anzeigen
       if(!f.broken&&(!Number.isFinite(f.kwWert)||f.kwWert<=0))return;
+      // VERTIKAL: feste Spur, gleichmäßig verteilt + sanftes Wackeln
       const yBase=areaT+Math.round(i*lh+(lh-ch)/2);
       const wobble=isCold?Math.sin(tick*0.07+i*0.9)*3:Math.sin(tick*0.05+i*1.1)*2;
       const y=Math.round(yBase+wobble);
+
+      // HORIZONTAL: KW-Wert bestimmt Position
+      // Hoher Wert = weit links (vorne), niedriger = weiter rechts, Motorschaden = ganz rechts
       let x;
-      if(f.broken||!Number.isFinite(f.kwWert)||f.kwWert<=0){x=xBroken;}
-      else{const r=Math.min(1,f.kwWert/maxVal);x=xFront+Math.round((1-r)*(xBack-xFront));}
+      if(f.broken||!Number.isFinite(f.kwWert)||f.kwWert<=0){
+        x=xBroken;
+      } else {
+        const r=Math.min(1,f.kwWert/maxVal);
+        x=xFront+Math.round((1-r)*(xBack-xFront));
+      }
+
       const rendCh=drawCar(f,x,y,cw,isCold);
-      cx.fillStyle=f.broken?'#f44':f.farbe;cx.font=nfs+'px monospace';
+
+      // Name über Auto (voll anzeigen)
+      cx.fillStyle=f.broken?'#f44':f.farbe;
+      cx.font=nfs+'px monospace';
       cx.fillText(f.name,x,y-Math.round(ch*.72));
-      if(f.broken){cx.fillStyle='#f44';cx.fillText('MOTORSCHADEN!',x,y+rendCh+14);}
-      else{cx.fillStyle='#ccc';cx.fillText(f.kwWert.toFixed(2),x,y+rendCh+14);}
+
+      // KW-Wert unter Auto
+      cx.font=nfs+'px monospace';
+      if(f.broken){
+        cx.fillStyle='#f44';cx.fillText('MOTORSCHADEN!',x,y+rendCh+14);
+      } else if(Number.isFinite(f.kwWert)&&f.kwWert>0){
+        cx.fillStyle='#ccc';cx.fillText(f.kwWert.toFixed(2),x,y+rendCh+14);
+      } else {
+        cx.fillStyle='#555';cx.fillText('–',x,y+rendCh+14);
+      }
     });
   }
+
   drawGroup(warm,l.roadT,l.roadH,false,maxWarm);
   drawGroup(cold,l.bumpT,l.bumpH,true,maxCold);
 }
 
+// ── TICKER ────────────────────────────────────────────────────────
 function drawTicker(l){
   if(!fahrer.length)return;
   const sorted=[...fahrer].filter(f=>f.aktiv).sort((a,b)=>a.rang-b.rang);
   const fs=Math.max(9,Math.round(W*0.012));
-  const tickT=l.bumpB, th=H-tickT;
+  const tickT=l.bumpB;
+  const th=H-tickT;
   cx.fillStyle='#000';cx.fillRect(0,tickT,W,th);
   cx.fillStyle='#003300';cx.fillRect(0,tickT,W,2);
-  const kwStr=f=>f.broken?'[⚠ MOTORSCHADEN]':Number.isFinite(f.kwWert)&&f.kwWert>0?f.kwWert.toFixed(2):null;
-  const full=tickerText+'  ★  '+sorted.filter(f=>f.broken||(Number.isFinite(f.kwWert)&&f.kwWert>0)).map(f=>f.rang+'. '+f.name+'  '+kwStr(f)).join('  |  ')+'  ★  ';
+  const kwStr=f=>f.broken?'[⚠ MOTORSCHADEN]':Number.isFinite(f.kwWert)&&f.kwWert>0?f.kwWert.toFixed(2):'–';
+  const full=tickerText+'  ★  '+sorted.map(f=>f.rang+'. '+f.name+'  '+kwStr(f)).join('  |  ')+'  ★  ';
   cx.fillStyle='#0f0';cx.font=fs+'px monospace';
   const tw=cx.measureText(full).width;
   const xPos=((W-(tick*SPD*0.9))%(tw+W)+tw+W)%(tw+W)-tw;
   cx.fillText(full,xPos,tickT+Math.round(th*0.68));
 }
 
+// ── MAIN LOOP ─────────────────────────────────────────────────────
 function frame(){
   try{
-    if(loading){drawLoading();}
-    else{
+    if(loading){
+      drawLoading();
+    } else {
       const l=getLy();
       cx.clearRect(0,0,W,H);
-      drawBg(l);drawListe(l);drawAutos(l);drawTicker(l);
+      drawBg(l);
+      drawListe(l);
+      drawAutos(l);
+      drawTicker(l);
     }
   }catch(e){
     cx.fillStyle='#111';cx.fillRect(0,0,W,H);
-    cx.fillStyle='#f00';cx.font='14px monospace';cx.textAlign='left';
-    cx.fillText('FEHLER: '+e.message,20,H/2);
+    cx.fillStyle='#f00';cx.font='14px monospace';
+    cx.textAlign='left';
+    cx.fillText('JS FEHLER: '+e.message,20,H/2);
   }
   tick++;
   requestAnimationFrame(frame);
 }
 
+// ── START ─────────────────────────────────────────────────────────
+localStorage.setItem('cfgUrl',CFG_URL);
+localStorage.setItem('datUrl',DAT_URL);
 startCountdown();
+setInterval(doReload,RELOAD_MIN*60*1000);
 doReload();
 frame();
 </script>

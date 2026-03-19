@@ -131,7 +131,11 @@ async function doReload(){
   lastLoad=new Date().toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'});
   const ok=fahrer.length>0;
   setStatus(ok?'OK '+lastLoad:'DAT ERR');
-  if(ok){loading=false;clearInterval(countdownTimer);}
+  if(ok){
+    // Mindestens 4 Sekunden Ladescreen zeigen
+    const minWait=Math.max(0,(4-(30-countdown))*1000);
+    setTimeout(()=>{loading=false;clearInterval(countdownTimer);},minWait);
+  }
 }
 
 function getLy(){

@@ -7,6 +7,8 @@
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <title>Sales Grand Prix</title>
+<script src="./data.js?_=BUILDTIME"></script>
+<title>Sales Grand Prix</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
 *{box-sizing:border-box;margin:0;padding:0}
@@ -65,10 +67,11 @@ function startCountdown(){
 }
 
 async function fetchTSV(url){
-  const r=await fetch(url+'?_='+Date.now(),{
-    cache:'no-store',
-    headers:{'Cache-Control':'no-cache','Pragma':'no-cache'}
-  });
+  // Daten kommen aus data.js (kein Fetch, kein Cache-Problem!)
+  if(url.includes('daten') && window.DATEN_TSV) return window.DATEN_TSV;
+  if(url.includes('config') && window.CONFIG_TSV) return window.CONFIG_TSV;
+  // Fallback: normaler Fetch
+  const r=await fetch(url+'?_='+Date.now(),{cache:'no-store'});
   if(!r.ok)throw new Error('HTTP '+r.status);
   return r.text();
 }
@@ -137,7 +140,7 @@ async function loadDaten(url){
 
 async function doReload(){
   await Promise.all([loadConfig(CFG_URL),loadDaten(DAT_URL)]);
-  lastLoad=new Date().toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'});
+  lastLoad=window.DATA_TIMESTAMP||new Date().toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'});
   const ok=fahrer.length>0;
   setStatus(ok?'OK '+lastLoad:'DAT ERR');
   if(ok){

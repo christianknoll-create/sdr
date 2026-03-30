@@ -1,9 +1,8 @@
-
 name: Daten aktualisieren
 
 on:
   schedule:
-    - cron: '0 * * * *'
+    - cron: '*/15 * * * *'
   workflow_dispatch:
 
 permissions:
@@ -17,15 +16,21 @@ jobs:
         with:
           ref: main
 
-      - name: TSV von Google Sheets holen
+      - name: TSV von Google Sheets holen und in JS umwandeln
         run: |
           curl -L "https://docs.google.com/spreadsheets/d/e/2PACX-1vT-tkuIx-dJHnRZ4eJcFe9PTkHpqMCDdrnUaYvl1vF7-KaHqGCcvzq1Znw5VZ_2WFPGDVAYL2kZPwhC/pub?gid=1875048167&single=true&output=tsv" -o daten.tsv
           curl -L "https://docs.google.com/spreadsheets/d/e/2PACX-1vT-tkuIx-dJHnRZ4eJcFe9PTkHpqMCDdrnUaYvl1vF7-KaHqGCcvzq1Znw5VZ_2WFPGDVAYL2kZPwhC/pub?gid=0&single=true&output=tsv" -o config.tsv
+          TS=$(date '+%Y%m%d%H%M%S')
+          echo "window.DATEN_TSV = $(cat daten.tsv | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))");" > data.js
+          echo "window.CONFIG_TSV = $(cat config.tsv | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))");" >> data.js
+          echo "window.DATA_TIMESTAMP = '$(date '+%Y-%m-%d %H:%M')';" >> data.js
+          # Timestamp in index.html einsetzen damit Browser data.js neu lädt
+          sed -i "s|data.js?_=[^\"]*|data.js?_=${TS}|g" index.html
 
       - name: Commit und Push
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add daten.tsv config.tsv
+          git add daten.tsv config.tsv data.js
           git diff --staged --quiet || git commit -m "Daten update $(date '+%Y-%m-%d %H:%M')"
           git push origin HEAD:main

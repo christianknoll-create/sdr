@@ -108,17 +108,25 @@ async function loadDaten(url){
   try{
     const raw=await fetchTSV(url);
     const rows=parseTSV(raw);
-    const namen=rows[0].slice(1).map(s=>s.trim()).filter(s=>s!=='');
+    // Zeilen dynamisch nach Label suchen – robust gegen Strukturänderungen im Sheet
+    const rNamen =rows.find(r=>/^rennname/i.test((r[0]||'').trim()));
+    const rTyp   =rows.find(r=>/^typ/i.test((r[0]||'').trim()));
+    const rFarbe =rows.find(r=>/^farbe/i.test((r[0]||'').trim()));
+    const rAktiv =rows.find(r=>/^aktiv/i.test((r[0]||'').trim()));
+    const rRang  =rows.find(r=>/^rang/i.test((r[0]||'').trim()));
+    if(!rNamen)return false;
+    const namen=rNamen.slice(1).map(s=>s.trim()).filter(s=>s!=='');
     const n=namen.length;
     if(n===0)return false;
-    const typen =rows[1].slice(1,n+1).map(s=>(s||'').toUpperCase().includes('COLD')?'COLD':'WARM');
-    const farben=rows[2].slice(1,n+1).map((s,i)=>{const c=(s||'').trim();return c.startsWith('#')?c:FARB_POOL[i%FARB_POOL.length];});
-    const aktiv =rows[3].slice(1,n+1).map(s=>String(s||'').trim()==='1');
-    const raenge=rows[4].slice(1,n+1).map(s=>parseInt(s)||999);
-    const kwZeilen=rows.slice(5).filter(r=>{
+    const typen =(rTyp  ||[]).slice(1,n+1).map(s=>(s||'').toUpperCase().includes('COLD')?'COLD':'WARM');
+    const farben=(rFarbe||[]).slice(1,n+1).map((s,i)=>{const c=(s||'').trim();return c.startsWith('#')?c:FARB_POOL[i%FARB_POOL.length];});
+    const aktiv =(rAktiv||[]).slice(1,n+1).map(s=>String(s||'').trim()==='1');
+    const aktivFinal=rAktiv?aktiv:namen.map(()=>true);
+    const raenge=(rRang ||[]).slice(1,n+1).map(s=>parseInt(s)||999);
+    // Nur echte KW-Zeilen mit mindestens einem Wert
+    const kwZeilen=rows.filter(r=>{
       const label=(r[0]||'').trim();
-      if(!label)return false;
-      return r.slice(1,n+1).some(v=>Number.isFinite(toNum(v)));
+      return /^KW\d+$/i.test(label)&&r.slice(1,n+1).some(v=>Number.isFinite(toNum(v)));
     });
     if(!kwZeilen.length)return false;
     aktKW=(kwZeilen[kwZeilen.length-1][0]||'').trim();
@@ -129,7 +137,7 @@ async function loadDaten(url){
         if(Number.isFinite(v)){kwWert=v;break;}
       }
       const broken=Number.isFinite(kwWert)&&kwWert===0;
-      return{name,typ:typen[i],farbe:farben[i],rang:raenge[i],aktiv:aktiv[i],kwWert,broken};
+      return{name,typ:typen[i],farbe:farben[i],rang:raenge[i],aktiv:aktivFinal[i],kwWert,broken};
     });
     return true;
   }catch(e){
